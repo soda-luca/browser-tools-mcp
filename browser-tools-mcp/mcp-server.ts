@@ -307,11 +307,31 @@ server.tool(
         `http://${discoveredHost}:${discoveredPort}/selected-element`
       );
       const json = await response.json();
+      
+      // Formatta l'output in modo che mostri chiaramente sia la versione completa che troncata
+      let formattedOutput = JSON.stringify(json, null, 2);
+      
+      // Se ci sono sia fullOuterHTML che outerHTML, aggiungi una nota esplicativa
+      if (json.fullOuterHTML && json.outerHTML) {
+        formattedOutput += "\n\n----- NOTA -----\n";
+        formattedOutput += "Il campo 'fullOuterHTML' contiene l'HTML completo dell'elemento.\n";
+        formattedOutput += "Il campo 'outerHTML' contiene la versione troncata.\n";
+      }
+      
+      // Se ci sono sia fullInnerHTML che innerHTML, aggiungi una nota esplicativa
+      if (json.fullInnerHTML && json.innerHTML) {
+        if (!json.fullOuterHTML) {
+          formattedOutput += "\n\n----- NOTA -----\n";
+        }
+        formattedOutput += "Il campo 'fullInnerHTML' contiene l'HTML interno completo dell'elemento.\n";
+        formattedOutput += "Il campo 'innerHTML' contiene la versione troncata.\n";
+      }
+      
       return {
         content: [
           {
             type: "text",
-            text: JSON.stringify(json, null, 2),
+            text: formattedOutput,
           },
         ],
       };

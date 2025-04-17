@@ -505,7 +505,25 @@ app.post("/selected-element", (req, res) => {
 });
 
 app.get("/selected-element", (req, res) => {
-  res.json(selectedElement || { message: "No element selected" });
+  if (selectedElement) {
+    // Crea una copia dell'oggetto selectedElement
+    const result = JSON.parse(JSON.stringify(selectedElement));
+    
+    // Se c'è l'outerHTML, salva una versione completa prima di troncarla
+    if (result.outerHTML) {
+      result.fullOuterHTML = result.outerHTML;
+    }
+    
+    // Se c'è l'innerHTML, salva una versione completa prima di troncarla
+    if (result.innerHTML) {
+      result.fullInnerHTML = result.innerHTML;
+    }
+    
+    // Restituisci l'oggetto con sia le versioni complete che quelle troncate
+    res.json(result);
+  } else {
+    res.json({ message: "No element selected" });
+  }
 });
 
 app.get("/.port", (req, res) => {
