@@ -254,44 +254,65 @@ server.tool(
   async () => {
     return await withServerConnection(async () => {
       try {
+        console.log("MCP: Inviando richiesta di screenshot al server...");
         const response = await fetch(
           `http://${discoveredHost}:${discoveredPort}/capture-screenshot`,
           {
             method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            // Aggiungiamo timeout per evitare che si blocchi
+            signal: AbortSignal.timeout(10000),
           }
         );
 
         const result = await response.json();
 
         if (response.ok) {
+          console.log("MCP: Screenshot catturato con successo:", result);
           return {
             content: [
               {
                 type: "text",
-                text: "Successfully saved screenshot",
+                text: `Screenshot salvato con successo in: ${result.path || "percorso predefinito"}`,
               },
             ],
           };
         } else {
+          console.error("MCP: Errore durante la cattura dello screenshot:", result);
+          let errorMessage = "Errore durante la cattura dello screenshot";
+          
+          if (result.error) {
+            if (result.error.includes("DevTools")) {
+              errorMessage = "Non è possibile catturare screenshot delle pagine DevTools. Assicurati di essere su una pagina web normale.";
+            } else {
+              errorMessage = `Errore: ${result.error}`;
+            }
+          }
+          
           return {
             content: [
               {
                 type: "text",
-                text: `Error taking screenshot: ${result.error}`,
+                text: errorMessage,
               },
             ],
+            isError: true,
           };
         }
       } catch (error: any) {
+        console.error("MCP: Errore nella funzione takeScreenshot:", error);
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         return {
           content: [
             {
               type: "text",
-              text: `Failed to take screenshot: ${errorMessage}`,
+              text: `Impossibile catturare lo screenshot: ${errorMessage}. Assicurati che il server dell'estensione sia in esecuzione e che l'estensione sia connessa.`,
             },
           ],
+          isError: true,
         };
       }
     });

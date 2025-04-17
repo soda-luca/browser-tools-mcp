@@ -968,44 +968,61 @@ async function setupWebSocket() {
           console.log("Chrome Extension: Taking screenshot...");
           console.log("Chrome Extension: Request ID:", message.requestId);
           
-          // Capture screenshot of the current tab
-          chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+          // Ottieni il tab ID dalla finestra ispezionata
+          const tabId = chrome.devtools.inspectedWindow.tabId;
+          
+          // Prima attiva la scheda da catturare
+          chrome.tabs.update(tabId, { active: true }, () => {
             if (chrome.runtime.lastError) {
               console.error(
-                "Chrome Extension: Screenshot capture failed:",
+                "Chrome Extension: Error activating tab:",
                 chrome.runtime.lastError
               );
-              ws.send(
-                JSON.stringify({
-                  type: "screenshot-error",
-                  error: chrome.runtime.lastError.message,
-                  requestId: message.requestId,
-                })
-              );
-              return;
+              // Continuiamo comunque con la cattura
             }
-
-            console.log("Chrome Extension: Screenshot captured successfully");
-            console.log("Chrome Extension: Using requestId:", message.requestId);
             
-            // Just send the screenshot data, let the server handle paths
-            const response = {
-              type: "screenshot-data",
-              data: dataUrl,
-              requestId: message.requestId,
-              // Only include path if it's configured in settings
-              ...(settings.screenshotPath && { path: settings.screenshotPath }),
-              // Include auto-paste setting
-              autoPaste: settings.allowAutoPaste,
-            };
+            // Aggiungiamo un breve timeout per dare tempo al browser di attivare la scheda
+            setTimeout(() => {
+              // Catturiamo lo screenshot
+              chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+                if (chrome.runtime.lastError) {
+                  console.error(
+                    "Chrome Extension: Screenshot capture failed:",
+                    chrome.runtime.lastError
+                  );
+                  ws.send(
+                    JSON.stringify({
+                      type: "screenshot-error",
+                      error: chrome.runtime.lastError.message,
+                      requestId: message.requestId,
+                    })
+                  );
+                  return;
+                }
 
-            console.log("Chrome Extension: Sending screenshot data response", {
-              ...response,
-              data: "[base64 data]",
-              requestId: response.requestId
-            });
+                console.log("Chrome Extension: Screenshot captured successfully");
+                console.log("Chrome Extension: Using requestId:", message.requestId);
+                
+                // Just send the screenshot data, let the server handle paths
+                const response = {
+                  type: "screenshot-data",
+                  data: dataUrl,
+                  requestId: message.requestId,
+                  // Only include path if it's configured in settings
+                  ...(settings.screenshotPath && { path: settings.screenshotPath }),
+                  // Include auto-paste setting
+                  autoPaste: settings.allowAutoPaste,
+                };
 
-            ws.send(JSON.stringify(response));
+                console.log("Chrome Extension: Sending screenshot data response", {
+                  ...response,
+                  data: "[base64 data]",
+                  requestId: response.requestId
+                });
+
+                ws.send(JSON.stringify(response));
+              });
+            }, 300); // Piccolo ritardo per consentire il cambio di scheda
           });
         } else if (message.type === "execute-javascript") {
           console.log("Chrome Extension: Executing JavaScript...");

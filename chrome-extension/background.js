@@ -375,75 +375,72 @@ function captureAndSendScreenshot(message, settings, sendResponse) {
       return;
     }
 
-    // Esegui uno script nella pagina per attivare la scheda prima di catturare lo screenshot
-    chrome.scripting.executeScript({
-      target: { tabId: message.tabId },
-      function: () => {
-        // Questa funzione viene eseguita nella pagina web da ispezionare
-        // e serve solo a garantire che la scheda sia attiva
-        console.log("Preparazione alla cattura dello screenshot...");
-      },
-    }, () => {
-      // Ignoriamo eventuali errori e procediamo con la cattura
+    // Per assicurarci che catturiamo la pagina ispezionata e non DevTools,
+    // attiva prima la scheda ispezionata
+    chrome.tabs.update(message.tabId, { active: true }, (updatedTab) => {
       if (chrome.runtime.lastError) {
-        console.log("Nota: script di preparazione non eseguito:", chrome.runtime.lastError.message);
+        console.error("Error activating tab:", chrome.runtime.lastError);
+        // Procediamo comunque anche se l'attivazione fallisce
       }
       
-      // Cattura lo screenshot direttamente dalla scheda indicata
-      chrome.tabs.captureVisibleTab(
-        tab.windowId,
-        { format: "png" },
-        (dataUrl) => {
-          if (chrome.runtime.lastError) {
-            console.error(
-              "Error capturing screenshot:",
-              chrome.runtime.lastError
-            );
-            sendResponse({
-              success: false,
-              error: chrome.runtime.lastError.message,
-            });
-            return;
-          }
-
-          // Send screenshot data to browser connector using configured settings
-          const serverUrl = `http://${settings.serverHost}:${settings.serverPort}/screenshot`;
-          console.log(`Sending screenshot to ${serverUrl}`);
-
-          fetch(serverUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              data: dataUrl,
-              path: message.screenshotPath,
-            }),
-          })
-            .then((response) => response.json())
-            .then((result) => {
-              if (result.error) {
-                console.error("Error from server:", result.error);
-                sendResponse({ success: false, error: result.error });
-              } else {
-                console.log("Screenshot saved successfully:", result.path);
-                // Send success response
-                sendResponse({
-                  success: true,
-                  path: result.path,
-                  title: tab.title || "Current Tab",
-                });
-              }
-            })
-            .catch((error) => {
-              console.error("Error sending screenshot data:", error);
+      // Breve timeout per dare tempo al browser di attivare la scheda
+      setTimeout(() => {
+        // Cattura lo screenshot dalla finestra corretta
+        chrome.tabs.captureVisibleTab(
+          tab.windowId,
+          { format: "png" },
+          (dataUrl) => {
+            if (chrome.runtime.lastError) {
+              console.error(
+                "Error capturing screenshot:",
+                chrome.runtime.lastError
+              );
               sendResponse({
                 success: false,
-                error: error.message || "Failed to save screenshot",
+                error: chrome.runtime.lastError.message,
               });
-            });
-        }
-      );
+              return;
+            }
+
+            // Send screenshot data to browser connector using configured settings
+            const serverUrl = `http://${settings.serverHost}:${settings.serverPort}/screenshot`;
+            console.log(`Sending screenshot to ${serverUrl}`);
+
+            fetch(serverUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                data: dataUrl,
+                path: message.screenshotPath,
+              }),
+            })
+              .then((response) => response.json())
+              .then((result) => {
+                if (result.error) {
+                  console.error("Error from server:", result.error);
+                  sendResponse({ success: false, error: result.error });
+                } else {
+                  console.log("Screenshot saved successfully:", result.path);
+                  // Send success response
+                  sendResponse({
+                    success: true,
+                    path: result.path,
+                    title: tab.title || "Current Tab",
+                  });
+                }
+              })
+              .catch((error) => {
+                console.error("Error sending screenshot data:", error);
+                sendResponse({
+                  success: false,
+                  error: error.message || "Failed to save screenshot",
+                });
+              });
+          }
+        );
+      }, 300); // piccolo ritardo per consentire il cambio di scheda
     });
   });
 }

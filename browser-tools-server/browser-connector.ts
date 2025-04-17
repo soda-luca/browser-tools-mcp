@@ -20,6 +20,7 @@ import {
 } from "./lighthouse/index.js";
 import * as net from "net";
 import { runBestPracticesAudit } from "./lighthouse/best-practices.js";
+import crypto from "crypto";
 
 /**
  * Converts a file path to the appropriate format for the current platform
@@ -1029,334 +1030,130 @@ export class BrowserConnector {
   // Add new endpoint for programmatic screenshot capture
   async captureScreenshot(req: express.Request, res: express.Response) {
     console.log("Browser Connector: Starting captureScreenshot method");
-    console.log("Browser Connector: Request headers:", req.headers);
-    console.log("Browser Connector: Request method:", req.method);
 
     if (!this.activeConnection) {
-      console.log(
-        "Browser Connector: No active WebSocket connection to Chrome extension"
-      );
-      return res.status(503).json({ error: "Chrome extension not connected" });
+      console.error("Browser Connector: No active WebSocket connection to extension");
+      return res.status(503).json({ 
+        error: "Chrome extension not connected", 
+        message: "È necessario che l'estensione Chrome sia connessa per catturare screenshot. Verifica che l'estensione sia installata e che DevTools sia aperto."
+      });
     }
 
+    console.log("Browser Connector: Active connection found, proceeding");
+
+    // Generate a unique request ID
+    const requestId = crypto.randomUUID();
+
+    console.log("Browser Connector: Created request ID:", requestId);
+
+    // Create a promise to handle the screenshot response
+    const screenshotPromise = new Promise<{
+      data: string;
+      path?: string;
+      autoPaste?: boolean;
+    }>((resolve, reject) => {
+      // Set a timeout for the screenshot request
+      const timeoutId = setTimeout(() => {
+        // Remove the callback since it timed out
+        console.error("Browser Connector: Screenshot request timed out");
+        screenshotCallbacks.delete(requestId);
+        reject(new Error("Screenshot request timed out after 30 seconds"));
+      }, 30000); // 30 second timeout
+
+      // Store the callback with the request ID
+      console.log("Browser Connector: Storing callback with request ID:", requestId);
+      screenshotCallbacks.set(requestId, {
+        resolve: (data) => {
+          clearTimeout(timeoutId);
+          resolve(data);
+        },
+        reject: (error) => {
+          clearTimeout(timeoutId);
+          reject(error);
+        },
+      });
+    });
+
     try {
-      console.log("Browser Connector: Starting screenshot capture...");
-      const requestId = Date.now().toString();
-      console.log("Browser Connector: Generated requestId:", requestId);
+      // Send the screenshot request to the extension
+      console.log("Browser Connector: Sending screenshot request to extension");
+      this.activeConnection.send(
+        JSON.stringify({
+          type: "take-screenshot",
+          requestId,
+        })
+      );
 
-      // Verifica se ci sono altri callback già registrati
-      console.log("Browser Connector: Current callbacks before adding new one:", 
-        Array.from(screenshotCallbacks.keys()));
+      // Wait for the response
+      console.log("Browser Connector: Waiting for screenshot response");
+      const {
+        data: base64Data,
+        path: customPath,
+        autoPaste,
+      } = await screenshotPromise;
+      console.log("Browser Connector: Received screenshot data, saving...");
+      console.log("Browser Connector: Custom path from extension:", customPath);
+      console.log("Browser Connector: Auto-paste setting:", autoPaste);
       
-      // Create promise that will resolve when we get the screenshot data
-      const screenshotPromise = new Promise<{
-        data: string;
-        path?: string;
-        autoPaste?: boolean;
-      }>((resolve, reject) => {
-        console.log(
-          `Browser Connector: Setting up screenshot callback for requestId: ${requestId}`
-        );
-        // Store callback in map
-        screenshotCallbacks.set(requestId, { resolve, reject });
-        console.log(
-          "Browser Connector: Current callbacks after adding:",
-          Array.from(screenshotCallbacks.keys())
-        );
+      // Always prioritize the path from the Chrome extension
+      let targetPath = customPath;
 
-        // Set timeout to clean up if we don't get a response
-        setTimeout(() => {
-          if (screenshotCallbacks.has(requestId)) {
-            console.log(
-              `Browser Connector: Screenshot capture timed out for requestId: ${requestId}`
-            );
-            screenshotCallbacks.delete(requestId);
-            console.log(
-              "Browser Connector: Remaining callbacks after timeout:",
-              Array.from(screenshotCallbacks.keys())
-            );
-            reject(
-              new Error(
-                "Screenshot capture timed out - no response from Chrome extension"
-              )
-            );
-          }
-        }, 15000); // Aumentato a 15 secondi per dare più tempo
-      });
-
-      // Send screenshot request to extension
-      const message = JSON.stringify({
-        type: "take-screenshot",
-        requestId: requestId,
-      });
-      console.log(
-        `Browser Connector: Sending WebSocket message to extension:`,
-        message
-      );
-      this.activeConnection.send(message);
-      console.log("Browser Connector: WebSocket message sent");
-
-      // Wait for screenshot data
-      console.log("Browser Connector: Waiting for screenshot data...");
-      try {
-        const {
-          data: base64Data,
-          path: customPath,
-          autoPaste,
-        } = await screenshotPromise;
-        console.log("Browser Connector: Received screenshot data, saving...");
-        console.log("Browser Connector: Custom path from extension:", customPath);
-        console.log("Browser Connector: Auto-paste setting:", autoPaste);
-        
-        // Always prioritize the path from the Chrome extension
-        let targetPath = customPath;
-
-        // If no path provided by extension, fall back to defaults
-        if (!targetPath) {
-          targetPath =
-            currentSettings.screenshotPath || getDefaultDownloadsFolder();
-        }
-
-        // Convert the path for the current platform
-        targetPath = convertPathForCurrentPlatform(targetPath);
-
-        console.log(`Browser Connector: Using path: ${targetPath}`);
-
-        if (!base64Data) {
-          throw new Error("No screenshot data received from Chrome extension");
-        }
-
-        try {
-          fs.mkdirSync(targetPath, { recursive: true });
-          console.log(`Browser Connector: Created directory: ${targetPath}`);
-        } catch (err) {
-          console.error(
-            `Browser Connector: Error creating directory: ${targetPath}`,
-            err
-          );
-          throw new Error(
-            `Failed to create screenshot directory: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
-        }
-
-        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-        const filename = `screenshot-${timestamp}.png`;
-        const fullPath = path.join(targetPath, filename);
-        console.log(`Browser Connector: Full screenshot path: ${fullPath}`);
-
-        // Remove the data:image/png;base64, prefix if present
-        const cleanBase64 = base64Data.replace(/^data:image\/png;base64,/, "");
-
-        // Save the file
-        try {
-          fs.writeFileSync(fullPath, cleanBase64, "base64");
-          console.log(`Browser Connector: Screenshot saved to: ${fullPath}`);
-        } catch (err) {
-          console.error(
-            `Browser Connector: Error saving screenshot to: ${fullPath}`,
-            err
-          );
-          throw new Error(
-            `Failed to save screenshot: ${
-              err instanceof Error ? err.message : String(err)
-            }`
-          );
-        }
-
-        // Check if running on macOS before executing AppleScript
-        if (os.platform() === "darwin" && autoPaste === true) {
-          console.log(
-            "Browser Connector: Running on macOS with auto-paste enabled, executing AppleScript to paste into Cursor"
-          );
-
-          // Create the AppleScript to copy the image to clipboard and paste into Cursor
-          // This version is more robust and includes debugging
-          const appleScript = `
-            -- Set path to the screenshot
-            set imagePath to "${fullPath}"
-            
-            -- Copy the image to clipboard
-            try
-              set the clipboard to (read (POSIX file imagePath) as «class PNGf»)
-            on error errMsg
-              log "Error copying image to clipboard: " & errMsg
-              return "Failed to copy image to clipboard: " & errMsg
-            end try
-            
-            -- Activate Cursor application
-            try
-              tell application "Cursor"
-                activate
-              end tell
-            on error errMsg
-              log "Error activating Cursor: " & errMsg
-              return "Failed to activate Cursor: " & errMsg
-            end try
-            
-            -- Wait for the application to fully activate
-            delay 3
-            
-            -- Try to interact with Cursor
-            try
-              tell application "System Events"
-                tell process "Cursor"
-                  -- Get the frontmost window
-                  if (count of windows) is 0 then
-                    return "No windows found in Cursor"
-                  end if
-                  
-                  set cursorWindow to window 1
-                  
-                  -- Try Method 1: Look for elements of class "Text Area"
-                  set foundElements to {}
-                  
-                  -- Try different selectors to find the text input area
-                  try
-                    -- Try with class
-                    set textAreas to UI elements of cursorWindow whose class is "Text Area"
-                    if (count of textAreas) > 0 then
-                      set foundElements to textAreas
-                    end if
-                  end try
-                  
-                  if (count of foundElements) is 0 then
-                    try
-                      -- Try with AXTextField role
-                      set textFields to UI elements of cursorWindow whose role is "AXTextField"
-                      if (count of textFields) > 0 then
-                        set foundElements to textFields
-                      end if
-                    end try
-                  end if
-                  
-                  if (count of foundElements) is 0 then
-                    try
-                      -- Try with AXTextArea role in nested elements
-                      set allElements to UI elements of cursorWindow
-                      repeat with anElement in allElements
-                        try
-                          set childElements to UI elements of anElement
-                          repeat with aChild in childElements
-                            try
-                              if role of aChild is "AXTextArea" or role of aChild is "AXTextField" then
-                                set end of foundElements to aChild
-                              end if
-                            end try
-                          end repeat
-                        end try
-                      end repeat
-                    end try
-                  end if
-                  
-                  -- If no elements found with specific attributes, try a broader approach
-                  if (count of foundElements) is 0 then
-                    -- Just try to use the Command+V shortcut on the active window
-                     -- This assumes Cursor already has focus on the right element
-                      keystroke "v" using command down
-                      delay 1
-                      keystroke "here is the screenshot"
-                      delay 1
-                     -- Try multiple methods to press Enter
-                     key code 36 -- Use key code for Return key
-                     delay 0.5
-                     keystroke return -- Use keystroke return as alternative
-                     return "Used fallback method: Command+V on active window"
-                  else
-                    -- We found a potential text input element
-                    set inputElement to item 1 of foundElements
-                    
-                    -- Try to focus and paste
-                    try
-                      set focused of inputElement to true
-                      delay 0.5
-                      
-                      -- Paste the image
-                      keystroke "v" using command down
-                      delay 1
-                      
-                      -- Type the text
-                      keystroke "here is the screenshot"
-                      delay 1
-                      -- Try multiple methods to press Enter
-                      key code 36 -- Use key code for Return key
-                      delay 0.5
-                      keystroke return -- Use keystroke return as alternative
-                      return "Successfully pasted screenshot into Cursor text element"
-                    on error errMsg
-                      log "Error interacting with found element: " & errMsg
-                      -- Fallback to just sending the key commands
-                      keystroke "v" using command down
-                      delay 1
-                      keystroke "here is the screenshot"
-                      delay 1
-                      -- Try multiple methods to press Enter
-                      key code 36 -- Use key code for Return key
-                      delay 0.5
-                      keystroke return -- Use keystroke return as alternative
-                      return "Used fallback after element focus error: " & errMsg
-                    end try
-                  end if
-                end tell
-              end tell
-            on error errMsg
-              log "Error in System Events block: " & errMsg
-              return "Failed in System Events: " & errMsg
-            end try
-          `;
-
-          // Execute the AppleScript
-          exec(`osascript -e '${appleScript}'`, (error, stdout, stderr) => {
-            if (error) {
-              console.error(
-                `Browser Connector: Error executing AppleScript: ${error.message}`
-              );
-              console.error(`Browser Connector: stderr: ${stderr}`);
-              // Don't fail the response; log the error and proceed
-            } else {
-              console.log(`Browser Connector: AppleScript executed successfully`);
-              console.log(`Browser Connector: stdout: ${stdout}`);
-            }
-          });
-        } else {
-          if (os.platform() === "darwin" && !autoPaste) {
-            console.log(
-              `Browser Connector: Running on macOS but auto-paste is disabled, skipping AppleScript execution`
-            );
-          } else {
-            console.log(
-              `Browser Connector: Not running on macOS, skipping AppleScript execution`
-            );
-          }
-        }
-
-        return res.json({
-          success: true,
-          path: fullPath,
-          filename: filename,
-        });
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        console.error(
-          "Browser Connector: Error capturing screenshot:",
-          errorMessage
-        );
-        return res.status(500).json({
-          error: errorMessage,
-        });
+      // If no path provided by extension, fall back to defaults
+      if (!targetPath) {
+        targetPath =
+          currentSettings.screenshotPath || getDefaultDownloadsFolder();
       }
-    } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      console.error(
-        "Browser Connector: Error in captureScreenshot method:",
-        errorMessage
-      );
-      return res.status(500).json({
-        error: errorMessage,
+
+      // Convert the path for the current platform
+      targetPath = convertPathForCurrentPlatform(targetPath);
+
+      console.log(`Browser Connector: Using path: ${targetPath}`);
+
+      if (!base64Data) {
+        throw new Error("No screenshot data received from Chrome extension");
+      }
+
+      try {
+        fs.mkdirSync(targetPath, { recursive: true });
+        console.log(`Browser Connector: Created directory: ${targetPath}`);
+      } catch (err) {
+        console.error(
+          `Browser Connector: Error creating directory: ${targetPath}`,
+          err
+        );
+        throw new Error(
+          `Failed to create screenshot directory: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `screenshot-${timestamp}.png`;
+      const fullPath = path.join(targetPath, filename);
+      console.log(`Browser Connector: Full screenshot path: ${fullPath}`);
+
+      // Remove the data:image/png;base64, prefix if present
+      const cleanBase64 = base64Data.replace(/^data:image\/png;base64,/, "");
+
+      // Save the image
+      fs.writeFileSync(fullPath, cleanBase64, "base64");
+      console.log("Browser Connector: Screenshot saved successfully");
+
+      // Return success response
+      res.json({
+        success: true,
+        path: fullPath,
+        filename,
+        autoPaste,
       });
+    } catch (error) {
+      console.error("Browser Connector: Error capturing screenshot:", error);
+      if (error instanceof Error) {
+        res.status(500).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: "Unknown error capturing screenshot" });
+      }
     }
   }
 
