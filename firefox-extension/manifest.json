@@ -17,7 +17,9 @@
         "tabs",
         "storage",
         "<all_urls>",
-        "webRequest"
+        "webRequest",
+        "tabCapture",
+        "debugger"
     ],
     "browser_action": {
         "default_icon": {
@@ -47,5 +49,6 @@
         "panel.js",
         "panel.css",
         "icons/*"
-    ]
+    ],
+    "devtools_page": "devtools.html"
 } 
