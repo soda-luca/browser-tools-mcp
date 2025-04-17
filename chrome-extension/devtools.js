@@ -9,7 +9,7 @@ let settings = {
   showRequestHeaders: false,
   showResponseHeaders: false,
   screenshotPath: "", // Add new setting for screenshot path
-  serverHost: "localhost", // Default server host
+  serverHost: "100.65.170.44", // Server host IP
   serverPort: 3025, // Default server port
   allowAutoPaste: false, // Default auto-paste setting
 };

@@ -163,7 +163,7 @@ let currentSettings = {
   maxLogSize: 20000,
   screenshotPath: getDefaultDownloadsFolder(),
   // Add server host configuration
-  serverHost: process.env.SERVER_HOST || "0.0.0.0", // Default to all interfaces
+  serverHost: process.env.SERVER_HOST || "100.65.170.44", // Binding to specific IP
 };
 
 // Add new storage for selected element

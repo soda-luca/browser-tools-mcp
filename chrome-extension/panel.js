@@ -8,7 +8,7 @@ let settings = {
   maxLogSize: 20000,
   screenshotPath: "",
   // Add server connection settings
-  serverHost: "localhost",
+  serverHost: "100.65.170.44",
   serverPort: 3025,
   allowAutoPaste: false, // Default auto-paste setting
 };

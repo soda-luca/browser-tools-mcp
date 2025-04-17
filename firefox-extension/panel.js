@@ -8,10 +8,10 @@ const settings = {
   maxLogSize: 20000,
   screenshotPath: "",
   // Add server connection settings
-  serverHost: 'localhost', // Host del server predefinito
-  serverPort: 3000, // Porta del server predefinita
+  serverHost: '100.65.170.44', // Host del server
+  serverPort: 3025, // Porta del server
   allowAutoPaste: false, // Default auto-paste setting
-  autoDiscoveryPorts: [3000, 3001, 3002, 3003, 3004, 3005] // Portes da controllare durante l'auto-discovery
+  autoDiscoveryPorts: [3025, 3026, 3027, 3028, 3029, 3030] // Portes da controllare durante l'auto-discovery
 };
 
 // Stato della connessione
