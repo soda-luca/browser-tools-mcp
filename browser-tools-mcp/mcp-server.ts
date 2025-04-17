@@ -12,7 +12,7 @@ const server = new McpServer({
 });
 
 // Track the discovered server connection
-let discoveredHost = "127.0.0.1";
+let discoveredHost = "100.65.170.44";
 let discoveredPort = 3025;
 let serverDiscovered = false;
 
@@ -51,7 +51,7 @@ function getDefaultServerHost(): string {
   }
 
   // Default to localhost
-  return "127.0.0.1";
+  return "100.65.170.44";
 }
 
 // Server discovery function - similar to what you have in the Chrome extension
@@ -59,7 +59,7 @@ async function discoverServer(): Promise<boolean> {
   console.log("Starting server discovery process");
 
   // Common hosts to try
-  const hosts = [getDefaultServerHost(), "127.0.0.1", "localhost"];
+  const hosts = [getDefaultServerHost(), "100.65.170.44", "localhost"];
 
   // Ports to try (start with default, then try others)
   const defaultPort = getDefaultServerPort();
