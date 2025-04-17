@@ -1444,6 +1444,66 @@ server.tool(
   }
 );
 
+// Add tool for JavaScript execution, launches a headless browser instance
+server.tool(
+  "runJavaScript",
+  "Esegui JavaScript nella pagina corrente e ottieni il risultato",
+  {},
+  async () => {
+    return await withServerConnection(async () => {
+      try {
+        // Ottieni lo script dal parametro della richiesta
+        const script = "document.title"; // Default script
+        console.log(`Esecuzione JavaScript: ${script}`);
+        
+        const response = await fetch(
+          `http://${discoveredHost}:${discoveredPort}/execute-javascript`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+            body: JSON.stringify({
+              script: script
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error(`JavaScript execution error: ${errorText}`);
+          throw new Error(`Server ha risposto ${response.status}: ${errorText}`);
+        }
+
+        const json = await response.json();
+        
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(json.result, null, 2),
+            },
+          ],
+        };
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.error("Errore nell'esecuzione JavaScript:", errorMessage);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Errore nell'esecuzione JavaScript: ${errorMessage}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    });
+  }
+);
+
 // Start receiving messages on stdio
 (async () => {
   try {

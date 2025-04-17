@@ -966,6 +966,8 @@ async function setupWebSocket() {
           // console.log("Chrome Extension: Received heartbeat response");
         } else if (message.type === "take-screenshot") {
           console.log("Chrome Extension: Taking screenshot...");
+          console.log("Chrome Extension: Request ID:", message.requestId);
+          
           // Capture screenshot of the current tab
           chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
             if (chrome.runtime.lastError) {
@@ -984,6 +986,8 @@ async function setupWebSocket() {
             }
 
             console.log("Chrome Extension: Screenshot captured successfully");
+            console.log("Chrome Extension: Using requestId:", message.requestId);
+            
             // Just send the screenshot data, let the server handle paths
             const response = {
               type: "screenshot-data",
@@ -998,9 +1002,43 @@ async function setupWebSocket() {
             console.log("Chrome Extension: Sending screenshot data response", {
               ...response,
               data: "[base64 data]",
+              requestId: response.requestId
             });
 
             ws.send(JSON.stringify(response));
+          });
+        } else if (message.type === "execute-javascript") {
+          console.log("Chrome Extension: Executing JavaScript...");
+          console.log("Chrome Extension: Request ID:", message.requestId);
+          
+          // Esegui il codice JavaScript nella pagina
+          chrome.devtools.inspectedWindow.eval(message.script, (result, isException) => {
+            if (isException) {
+              console.error(
+                "Chrome Extension: JavaScript execution failed:",
+                isException
+              );
+              ws.send(
+                JSON.stringify({
+                  type: "javascript-result",
+                  error: isException.value || "Errore durante l'esecuzione del JavaScript",
+                  requestId: message.requestId,
+                })
+              );
+              return;
+            }
+
+            console.log("Chrome Extension: JavaScript executed successfully");
+            console.log("Chrome Extension: Result:", typeof result === 'object' ? '[object]' : result);
+            
+            // Invia il risultato al server
+            ws.send(
+              JSON.stringify({
+                type: "javascript-result",
+                result: result,
+                requestId: message.requestId,
+              })
+            );
           });
         } else if (message.type === "get-current-url") {
           console.log("Chrome Extension: Received request for current URL");

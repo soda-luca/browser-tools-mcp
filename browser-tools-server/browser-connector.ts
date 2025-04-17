@@ -181,6 +181,12 @@ interface ScreenshotCallback {
 
 const screenshotCallbacks = new Map<string, ScreenshotCallback>();
 
+// Add new Map for JavaScript execution callbacks
+const javascriptCallbacks = new Map<string, {
+  resolve: (value: any) => void;
+  reject: (reason: Error) => void;
+}>();
+
 // Function to get available port starting with the given port
 async function getAvailablePort(
   startPort: number,
@@ -623,6 +629,10 @@ export class BrowserConnector {
   private app: express.Application;
   private server: any;
   private urlRequestCallbacks: Map<string, (url: string) => void> = new Map();
+  private javascriptCallbacks: Map<string, {
+    resolve: (value: any) => void;
+    reject: (reason: Error) => void;
+  }> = new Map();
 
   constructor(app: express.Application, server: any) {
     this.app = app;
@@ -732,32 +742,85 @@ export class BrowserConnector {
             console.log("Received screenshot data");
             console.log("Screenshot path from extension:", data.path);
             console.log("Auto-paste setting from extension:", data.autoPaste);
-            // Get the most recent callback since we're not using requestId anymore
-            const callbacks = Array.from(screenshotCallbacks.values());
-            if (callbacks.length > 0) {
-              const callback = callbacks[0];
-              console.log("Found callback, resolving promise");
+            console.log("Request ID from extension:", data.requestId);
+            
+            // Verifica se c'è un requestId nella risposta
+            if (data.requestId && screenshotCallbacks.has(data.requestId)) {
+              const callback = screenshotCallbacks.get(data.requestId);
+              console.log(`Found callback for requestId: ${data.requestId}, resolving promise`);
+              
               // Pass both the data, path and autoPaste to the resolver
-              callback.resolve({
-                data: data.data,
-                path: data.path,
-                autoPaste: data.autoPaste,
-              });
-              screenshotCallbacks.clear(); // Clear all callbacks
+              if (callback) {
+                callback.resolve({
+                  data: data.data,
+                  path: data.path,
+                  autoPaste: data.autoPaste,
+                });
+                screenshotCallbacks.delete(data.requestId);
+              }
             } else {
-              console.log("No callbacks found for screenshot");
+              // Fallback al vecchio metodo (prendere il primo callback)
+              console.log("No requestId found or no matching callback, falling back to old method");
+              const callbacks = Array.from(screenshotCallbacks.values());
+              
+              if (callbacks.length > 0) {
+                const callback = callbacks[0];
+                console.log("Found callback using old method, resolving promise");
+                // Pass both the data, path and autoPaste to the resolver
+                callback.resolve({
+                  data: data.data,
+                  path: data.path,
+                  autoPaste: data.autoPaste,
+                });
+                screenshotCallbacks.clear(); // Clear all callbacks
+              } else {
+                console.log("No callbacks found for screenshot");
+              }
             }
           }
           // Handle screenshot error
           else if (data.type === "screenshot-error") {
             console.log("Received screenshot error:", data.error);
-            const callbacks = Array.from(screenshotCallbacks.values());
-            if (callbacks.length > 0) {
-              const callback = callbacks[0];
-              callback.reject(
-                new Error(data.error || "Screenshot capture failed")
-              );
-              screenshotCallbacks.clear(); // Clear all callbacks
+            console.log("Request ID from extension:", data.requestId);
+            
+            // Verifica se c'è un requestId nella risposta
+            if (data.requestId && screenshotCallbacks.has(data.requestId)) {
+              const callback = screenshotCallbacks.get(data.requestId);
+              console.log(`Found error callback for requestId: ${data.requestId}, rejecting promise`);
+              
+              if (callback) {
+                callback.reject(
+                  new Error(data.error || "Screenshot capture failed")
+                );
+                screenshotCallbacks.delete(data.requestId);
+              }
+            } else {
+              // Fallback al vecchio metodo (prendere il primo callback)
+              console.log("No requestId found or no matching callback for error, falling back to old method");
+              const callbacks = Array.from(screenshotCallbacks.values());
+              
+              if (callbacks.length > 0) {
+                const callback = callbacks[0];
+                callback.reject(
+                  new Error(data.error || "Screenshot capture failed")
+                );
+                screenshotCallbacks.clear(); // Clear all callbacks
+              }
+            }
+          }
+          // Handle JavaScript result
+          if (data.type === "javascript-result" && data.requestId) {
+            console.log("Ricevuto risultato JavaScript per requestId:", data.requestId);
+            
+            if (this.javascriptCallbacks.has(data.requestId)) {
+              const callback = this.javascriptCallbacks.get(data.requestId);
+              if (callback) {
+                console.log("Callback trovata, risolvendo la Promise");
+                callback.resolve(data.result);
+                this.javascriptCallbacks.delete(data.requestId);
+              }
+            } else {
+              console.log("Nessuna callback trovata per il risultato JavaScript");
             }
           } else {
             console.log("Unhandled message type:", data.type);
@@ -826,6 +889,15 @@ export class BrowserConnector {
             res.status(500).json({ error: "An unknown error occurred" });
           }
         }
+      }
+    );
+
+    // Aggiungi l'endpoint per eseguire JavaScript
+    this.app.post(
+      "/execute-javascript",
+      async (req: express.Request, res: express.Response) => {
+        console.log("Received request to execute JavaScript");
+        await this.executeJavaScript(req, res);
       }
     );
   }
@@ -972,6 +1044,10 @@ export class BrowserConnector {
       const requestId = Date.now().toString();
       console.log("Browser Connector: Generated requestId:", requestId);
 
+      // Verifica se ci sono altri callback già registrati
+      console.log("Browser Connector: Current callbacks before adding new one:", 
+        Array.from(screenshotCallbacks.keys()));
+      
       // Create promise that will resolve when we get the screenshot data
       const screenshotPromise = new Promise<{
         data: string;
@@ -984,7 +1060,7 @@ export class BrowserConnector {
         // Store callback in map
         screenshotCallbacks.set(requestId, { resolve, reject });
         console.log(
-          "Browser Connector: Current callbacks:",
+          "Browser Connector: Current callbacks after adding:",
           Array.from(screenshotCallbacks.keys())
         );
 
@@ -995,13 +1071,17 @@ export class BrowserConnector {
               `Browser Connector: Screenshot capture timed out for requestId: ${requestId}`
             );
             screenshotCallbacks.delete(requestId);
+            console.log(
+              "Browser Connector: Remaining callbacks after timeout:",
+              Array.from(screenshotCallbacks.keys())
+            );
             reject(
               new Error(
                 "Screenshot capture timed out - no response from Chrome extension"
               )
             );
           }
-        }, 10000);
+        }, 15000); // Aumentato a 15 secondi per dare più tempo
       });
 
       // Send screenshot request to extension
@@ -1014,253 +1094,267 @@ export class BrowserConnector {
         message
       );
       this.activeConnection.send(message);
+      console.log("Browser Connector: WebSocket message sent");
 
       // Wait for screenshot data
       console.log("Browser Connector: Waiting for screenshot data...");
-      const {
-        data: base64Data,
-        path: customPath,
-        autoPaste,
-      } = await screenshotPromise;
-      console.log("Browser Connector: Received screenshot data, saving...");
-      console.log("Browser Connector: Custom path from extension:", customPath);
-      console.log("Browser Connector: Auto-paste setting:", autoPaste);
-
-      // Always prioritize the path from the Chrome extension
-      let targetPath = customPath;
-
-      // If no path provided by extension, fall back to defaults
-      if (!targetPath) {
-        targetPath =
-          currentSettings.screenshotPath || getDefaultDownloadsFolder();
-      }
-
-      // Convert the path for the current platform
-      targetPath = convertPathForCurrentPlatform(targetPath);
-
-      console.log(`Browser Connector: Using path: ${targetPath}`);
-
-      if (!base64Data) {
-        throw new Error("No screenshot data received from Chrome extension");
-      }
-
       try {
-        fs.mkdirSync(targetPath, { recursive: true });
-        console.log(`Browser Connector: Created directory: ${targetPath}`);
-      } catch (err) {
-        console.error(
-          `Browser Connector: Error creating directory: ${targetPath}`,
-          err
-        );
-        throw new Error(
-          `Failed to create screenshot directory: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        );
-      }
+        const {
+          data: base64Data,
+          path: customPath,
+          autoPaste,
+        } = await screenshotPromise;
+        console.log("Browser Connector: Received screenshot data, saving...");
+        console.log("Browser Connector: Custom path from extension:", customPath);
+        console.log("Browser Connector: Auto-paste setting:", autoPaste);
+        
+        // Always prioritize the path from the Chrome extension
+        let targetPath = customPath;
 
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `screenshot-${timestamp}.png`;
-      const fullPath = path.join(targetPath, filename);
-      console.log(`Browser Connector: Full screenshot path: ${fullPath}`);
+        // If no path provided by extension, fall back to defaults
+        if (!targetPath) {
+          targetPath =
+            currentSettings.screenshotPath || getDefaultDownloadsFolder();
+        }
 
-      // Remove the data:image/png;base64, prefix if present
-      const cleanBase64 = base64Data.replace(/^data:image\/png;base64,/, "");
+        // Convert the path for the current platform
+        targetPath = convertPathForCurrentPlatform(targetPath);
 
-      // Save the file
-      try {
-        fs.writeFileSync(fullPath, cleanBase64, "base64");
-        console.log(`Browser Connector: Screenshot saved to: ${fullPath}`);
-      } catch (err) {
-        console.error(
-          `Browser Connector: Error saving screenshot to: ${fullPath}`,
-          err
-        );
-        throw new Error(
-          `Failed to save screenshot: ${
-            err instanceof Error ? err.message : String(err)
-          }`
-        );
-      }
+        console.log(`Browser Connector: Using path: ${targetPath}`);
 
-      // Check if running on macOS before executing AppleScript
-      if (os.platform() === "darwin" && autoPaste === true) {
-        console.log(
-          "Browser Connector: Running on macOS with auto-paste enabled, executing AppleScript to paste into Cursor"
-        );
+        if (!base64Data) {
+          throw new Error("No screenshot data received from Chrome extension");
+        }
 
-        // Create the AppleScript to copy the image to clipboard and paste into Cursor
-        // This version is more robust and includes debugging
-        const appleScript = `
-          -- Set path to the screenshot
-          set imagePath to "${fullPath}"
-          
-          -- Copy the image to clipboard
-          try
-            set the clipboard to (read (POSIX file imagePath) as «class PNGf»)
-          on error errMsg
-            log "Error copying image to clipboard: " & errMsg
-            return "Failed to copy image to clipboard: " & errMsg
-          end try
-          
-          -- Activate Cursor application
-          try
-            tell application "Cursor"
-              activate
-            end tell
-          on error errMsg
-            log "Error activating Cursor: " & errMsg
-            return "Failed to activate Cursor: " & errMsg
-          end try
-          
-          -- Wait for the application to fully activate
-          delay 3
-          
-          -- Try to interact with Cursor
-          try
-            tell application "System Events"
-              tell process "Cursor"
-                -- Get the frontmost window
-                if (count of windows) is 0 then
-                  return "No windows found in Cursor"
-                end if
-                
-                set cursorWindow to window 1
-                
-                -- Try Method 1: Look for elements of class "Text Area"
-                set foundElements to {}
-                
-                -- Try different selectors to find the text input area
-                try
-                  -- Try with class
-                  set textAreas to UI elements of cursorWindow whose class is "Text Area"
-                  if (count of textAreas) > 0 then
-                    set foundElements to textAreas
-                  end if
-                end try
-                
-                if (count of foundElements) is 0 then
-                  try
-                    -- Try with AXTextField role
-                    set textFields to UI elements of cursorWindow whose role is "AXTextField"
-                    if (count of textFields) > 0 then
-                      set foundElements to textFields
-                    end if
-                  end try
-                end if
-                
-                if (count of foundElements) is 0 then
-                  try
-                    -- Try with AXTextArea role in nested elements
-                    set allElements to UI elements of cursorWindow
-                    repeat with anElement in allElements
-                      try
-                        set childElements to UI elements of anElement
-                        repeat with aChild in childElements
-                          try
-                            if role of aChild is "AXTextArea" or role of aChild is "AXTextField" then
-                              set end of foundElements to aChild
-                            end if
-                          end try
-                        end repeat
-                      end try
-                    end repeat
-                  end try
-                end if
-                
-                -- If no elements found with specific attributes, try a broader approach
-                if (count of foundElements) is 0 then
-                  -- Just try to use the Command+V shortcut on the active window
-                   -- This assumes Cursor already has focus on the right element
-                    keystroke "v" using command down
-                    delay 1
-                    keystroke "here is the screenshot"
-                    delay 1
-                   -- Try multiple methods to press Enter
-                   key code 36 -- Use key code for Return key
-                   delay 0.5
-                   keystroke return -- Use keystroke return as alternative
-                   return "Used fallback method: Command+V on active window"
-                else
-                  -- We found a potential text input element
-                  set inputElement to item 1 of foundElements
-                  
-                  -- Try to focus and paste
-                  try
-                    set focused of inputElement to true
-                    delay 0.5
-                    
-                    -- Paste the image
-                    keystroke "v" using command down
-                    delay 1
-                    
-                    -- Type the text
-                    keystroke "here is the screenshot"
-                    delay 1
-                    -- Try multiple methods to press Enter
-                    key code 36 -- Use key code for Return key
-                    delay 0.5
-                    keystroke return -- Use keystroke return as alternative
-                    return "Successfully pasted screenshot into Cursor text element"
-                  on error errMsg
-                    log "Error interacting with found element: " & errMsg
-                    -- Fallback to just sending the key commands
-                    keystroke "v" using command down
-                    delay 1
-                    keystroke "here is the screenshot"
-                    delay 1
-                    -- Try multiple methods to press Enter
-                    key code 36 -- Use key code for Return key
-                    delay 0.5
-                    keystroke return -- Use keystroke return as alternative
-                    return "Used fallback after element focus error: " & errMsg
-                  end try
-                end if
-              end tell
-            end tell
-          on error errMsg
-            log "Error in System Events block: " & errMsg
-            return "Failed in System Events: " & errMsg
-          end try
-        `;
-
-        // Execute the AppleScript
-        exec(`osascript -e '${appleScript}'`, (error, stdout, stderr) => {
-          if (error) {
-            console.error(
-              `Browser Connector: Error executing AppleScript: ${error.message}`
-            );
-            console.error(`Browser Connector: stderr: ${stderr}`);
-            // Don't fail the response; log the error and proceed
-          } else {
-            console.log(`Browser Connector: AppleScript executed successfully`);
-            console.log(`Browser Connector: stdout: ${stdout}`);
-          }
-        });
-      } else {
-        if (os.platform() === "darwin" && !autoPaste) {
-          console.log(
-            `Browser Connector: Running on macOS but auto-paste is disabled, skipping AppleScript execution`
+        try {
+          fs.mkdirSync(targetPath, { recursive: true });
+          console.log(`Browser Connector: Created directory: ${targetPath}`);
+        } catch (err) {
+          console.error(
+            `Browser Connector: Error creating directory: ${targetPath}`,
+            err
           );
-        } else {
-          console.log(
-            `Browser Connector: Not running on macOS, skipping AppleScript execution`
+          throw new Error(
+            `Failed to create screenshot directory: ${
+              err instanceof Error ? err.message : String(err)
+            }`
           );
         }
-      }
 
-      res.json({
-        path: fullPath,
-        filename: filename,
-      });
+        const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+        const filename = `screenshot-${timestamp}.png`;
+        const fullPath = path.join(targetPath, filename);
+        console.log(`Browser Connector: Full screenshot path: ${fullPath}`);
+
+        // Remove the data:image/png;base64, prefix if present
+        const cleanBase64 = base64Data.replace(/^data:image\/png;base64,/, "");
+
+        // Save the file
+        try {
+          fs.writeFileSync(fullPath, cleanBase64, "base64");
+          console.log(`Browser Connector: Screenshot saved to: ${fullPath}`);
+        } catch (err) {
+          console.error(
+            `Browser Connector: Error saving screenshot to: ${fullPath}`,
+            err
+          );
+          throw new Error(
+            `Failed to save screenshot: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        }
+
+        // Check if running on macOS before executing AppleScript
+        if (os.platform() === "darwin" && autoPaste === true) {
+          console.log(
+            "Browser Connector: Running on macOS with auto-paste enabled, executing AppleScript to paste into Cursor"
+          );
+
+          // Create the AppleScript to copy the image to clipboard and paste into Cursor
+          // This version is more robust and includes debugging
+          const appleScript = `
+            -- Set path to the screenshot
+            set imagePath to "${fullPath}"
+            
+            -- Copy the image to clipboard
+            try
+              set the clipboard to (read (POSIX file imagePath) as «class PNGf»)
+            on error errMsg
+              log "Error copying image to clipboard: " & errMsg
+              return "Failed to copy image to clipboard: " & errMsg
+            end try
+            
+            -- Activate Cursor application
+            try
+              tell application "Cursor"
+                activate
+              end tell
+            on error errMsg
+              log "Error activating Cursor: " & errMsg
+              return "Failed to activate Cursor: " & errMsg
+            end try
+            
+            -- Wait for the application to fully activate
+            delay 3
+            
+            -- Try to interact with Cursor
+            try
+              tell application "System Events"
+                tell process "Cursor"
+                  -- Get the frontmost window
+                  if (count of windows) is 0 then
+                    return "No windows found in Cursor"
+                  end if
+                  
+                  set cursorWindow to window 1
+                  
+                  -- Try Method 1: Look for elements of class "Text Area"
+                  set foundElements to {}
+                  
+                  -- Try different selectors to find the text input area
+                  try
+                    -- Try with class
+                    set textAreas to UI elements of cursorWindow whose class is "Text Area"
+                    if (count of textAreas) > 0 then
+                      set foundElements to textAreas
+                    end if
+                  end try
+                  
+                  if (count of foundElements) is 0 then
+                    try
+                      -- Try with AXTextField role
+                      set textFields to UI elements of cursorWindow whose role is "AXTextField"
+                      if (count of textFields) > 0 then
+                        set foundElements to textFields
+                      end if
+                    end try
+                  end if
+                  
+                  if (count of foundElements) is 0 then
+                    try
+                      -- Try with AXTextArea role in nested elements
+                      set allElements to UI elements of cursorWindow
+                      repeat with anElement in allElements
+                        try
+                          set childElements to UI elements of anElement
+                          repeat with aChild in childElements
+                            try
+                              if role of aChild is "AXTextArea" or role of aChild is "AXTextField" then
+                                set end of foundElements to aChild
+                              end if
+                            end try
+                          end repeat
+                        end try
+                      end repeat
+                    end try
+                  end if
+                  
+                  -- If no elements found with specific attributes, try a broader approach
+                  if (count of foundElements) is 0 then
+                    -- Just try to use the Command+V shortcut on the active window
+                     -- This assumes Cursor already has focus on the right element
+                      keystroke "v" using command down
+                      delay 1
+                      keystroke "here is the screenshot"
+                      delay 1
+                     -- Try multiple methods to press Enter
+                     key code 36 -- Use key code for Return key
+                     delay 0.5
+                     keystroke return -- Use keystroke return as alternative
+                     return "Used fallback method: Command+V on active window"
+                  else
+                    -- We found a potential text input element
+                    set inputElement to item 1 of foundElements
+                    
+                    -- Try to focus and paste
+                    try
+                      set focused of inputElement to true
+                      delay 0.5
+                      
+                      -- Paste the image
+                      keystroke "v" using command down
+                      delay 1
+                      
+                      -- Type the text
+                      keystroke "here is the screenshot"
+                      delay 1
+                      -- Try multiple methods to press Enter
+                      key code 36 -- Use key code for Return key
+                      delay 0.5
+                      keystroke return -- Use keystroke return as alternative
+                      return "Successfully pasted screenshot into Cursor text element"
+                    on error errMsg
+                      log "Error interacting with found element: " & errMsg
+                      -- Fallback to just sending the key commands
+                      keystroke "v" using command down
+                      delay 1
+                      keystroke "here is the screenshot"
+                      delay 1
+                      -- Try multiple methods to press Enter
+                      key code 36 -- Use key code for Return key
+                      delay 0.5
+                      keystroke return -- Use keystroke return as alternative
+                      return "Used fallback after element focus error: " & errMsg
+                    end try
+                  end if
+                end tell
+              end tell
+            on error errMsg
+              log "Error in System Events block: " & errMsg
+              return "Failed in System Events: " & errMsg
+            end try
+          `;
+
+          // Execute the AppleScript
+          exec(`osascript -e '${appleScript}'`, (error, stdout, stderr) => {
+            if (error) {
+              console.error(
+                `Browser Connector: Error executing AppleScript: ${error.message}`
+              );
+              console.error(`Browser Connector: stderr: ${stderr}`);
+              // Don't fail the response; log the error and proceed
+            } else {
+              console.log(`Browser Connector: AppleScript executed successfully`);
+              console.log(`Browser Connector: stdout: ${stdout}`);
+            }
+          });
+        } else {
+          if (os.platform() === "darwin" && !autoPaste) {
+            console.log(
+              `Browser Connector: Running on macOS but auto-paste is disabled, skipping AppleScript execution`
+            );
+          } else {
+            console.log(
+              `Browser Connector: Not running on macOS, skipping AppleScript execution`
+            );
+          }
+        }
+
+        return res.json({
+          success: true,
+          path: fullPath,
+          filename: filename,
+        });
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.error(
+          "Browser Connector: Error capturing screenshot:",
+          errorMessage
+        );
+        return res.status(500).json({
+          error: errorMessage,
+        });
+      }
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
       console.error(
-        "Browser Connector: Error capturing screenshot:",
+        "Browser Connector: Error in captureScreenshot method:",
         errorMessage
       );
-      res.status(500).json({
+      return res.status(500).json({
         error: errorMessage,
       });
     }
@@ -1418,6 +1512,101 @@ export class BrowserConnector {
         });
       }
     });
+  }
+
+  // Aggiungi un metodo per eseguire JavaScript nel browser
+  async executeJavaScript(req: express.Request, res: express.Response) {
+    if (!req.body || !req.body.script) {
+      return res.status(400).json({ error: "Script non fornito" });
+    }
+    
+    const { script } = req.body;
+    console.log("Script da eseguire:", script);
+    
+    // Il codice da eseguire nella pagina - avvolge il codice originale per gestire le Promise
+    const wrappedScript = `
+      (async function() {
+        try {
+          const result = (${script});
+          
+          // Verifica se il risultato è una Promise
+          if (result && typeof result.then === 'function') {
+            return await result;
+          }
+          
+          return result;
+        } catch (error) {
+          return { 
+            __error__: true, 
+            message: error.message, 
+            stack: error.stack 
+          };
+        }
+      })()
+    `;
+    
+    // Invia il codice al browser attraverso WebSocket
+    if (!this.activeConnection) {
+      return res.status(503).json({ error: "Nessuna connessione attiva al browser" });
+    }
+    
+    try {
+      // Genera un ID univoco per questa richiesta
+      const requestId = Date.now().toString();
+      
+      // Crea una Promise che si risolverà quando riceveremo il risultato dal browser
+      const resultPromise = new Promise((resolve, reject) => {
+        // Set timeout per evitare che la richiesta rimanga in sospeso indefinitamente
+        const timeout = setTimeout(() => {
+          this.javascriptCallbacks.delete(requestId);
+          reject(new Error("Timeout durante l'esecuzione del JavaScript"));
+        }, 30000); // 30 secondi di timeout
+        
+        // Memorizza la callback per questa richiesta
+        this.javascriptCallbacks.set(requestId, {
+          resolve: (value) => {
+            clearTimeout(timeout);
+            resolve(value);
+          },
+          reject: (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          }
+        });
+      });
+      
+      // Invia la richiesta al browser
+      console.log(`Browser Connector: Sending WebSocket message to execute JavaScript:`, requestId);
+      this.activeConnection.send(JSON.stringify({
+        type: "execute-javascript",
+        script: wrappedScript,
+        requestId
+      }));
+      
+      // Attendi il risultato
+      console.log("Browser Connector: Waiting for JavaScript execution result...");
+      const result = await resultPromise;
+      console.log("Browser Connector: Received JavaScript execution result");
+      
+      // Controlla se il risultato è un errore
+      if (result && typeof result === 'object' && '__error__' in result) {
+        const errorObj = result as any;
+        return res.status(500).json({ 
+          error: "Errore durante l'esecuzione del JavaScript", 
+          details: errorObj.message,
+          stack: errorObj.stack
+        });
+      }
+      
+      // Restituisci il risultato
+      return res.json({ result });
+    } catch (error) {
+      console.error("Errore durante l'esecuzione del JavaScript:", error);
+      return res.status(500).json({ 
+        error: "Errore durante l'esecuzione del JavaScript", 
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 }
 
