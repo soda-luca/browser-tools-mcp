@@ -56,7 +56,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           console.error("Cannot capture DevTools pages due to browser security restrictions");
           sendResponse({
             success: false,
-            error: "Non è possibile catturare screenshot delle pagine DevTools per ragioni di sicurezza del browser.",
+            error: "Non è possibile catturare screenshot delle pagine DevTools per ragioni di sicurezza del browser. È una limitazione di Chrome che non può essere aggirata con i permessi.",
             isDevToolsPage: true
           });
           return;
@@ -90,6 +90,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     });
     return true; // Required to use sendResponse asynchronously
+  }
+
+  if (message.action === "takeScreenshot") {
+    chrome.tabs.get(sender.tab.id, (tab) => {
+      // Check if it's a DevTools page, which cannot be captured due to Chrome's security restrictions
+      if (tab.url.startsWith("chrome-devtools://")) {
+        sendResponse({
+          success: false,
+          error: "Cannot capture DevTools pages due to security restrictions"
+        });
+        return;
+      }
+
+      chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+        if (chrome.runtime.lastError) {
+          console.error("Screenshot error:", chrome.runtime.lastError);
+          sendResponse({
+            success: false,
+            error: chrome.runtime.lastError.message
+          });
+          return;
+        }
+
+        // Crea un nome file basato sulla data e ora attuali
+        const timestamp = new Date().toISOString().replace(/:/g, "-").replace(/\./g, "-");
+        const filename = `screenshot-${timestamp}.png`;
+        
+        // Salva direttamente l'immagine utilizzando l'API chrome.downloads
+        chrome.downloads.download({
+          url: dataUrl,
+          filename: filename,
+          saveAs: false // true per mostrare il dialogo di salvataggio
+        }, (downloadId) => {
+          if (chrome.runtime.lastError) {
+            console.error("Download error:", chrome.runtime.lastError);
+            sendResponse({
+              success: false,
+              error: chrome.runtime.lastError.message
+            });
+          } else {
+            sendResponse({
+              success: true,
+              message: "Screenshot salvato con successo",
+              downloadId: downloadId
+            });
+          }
+        });
+      });
+      
+      return true; // Indica che sendResponse sarà chiamato in modo asincrono
+    });
   }
 });
 

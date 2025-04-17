@@ -11,10 +11,18 @@
       "tabs",
       "tabCapture",
       "windows",
-      "scripting"
+      "scripting",
+      "webNavigation",
+      "webRequest",
+      "webRequestBlocking",
+      "downloads",
+      "declarativeNetRequest"
     ],
     "host_permissions": [
       "<all_urls>",
+      "http://*/*",
+      "https://*/*",
+      "file://*/*",
       "devtools://*/*"
     ],
     "background": {
