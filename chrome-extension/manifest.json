@@ -10,7 +10,8 @@
       "storage",
       "tabs",
       "tabCapture",
-      "windows"
+      "windows",
+      "scripting"
     ],
     "host_permissions": [
       "<all_urls>",
