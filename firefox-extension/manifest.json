@@ -1,0 +1,51 @@
+{
+    "manifest_version": 2,
+    "name": "Browser Developer Tools",
+    "version": "1.0",
+    "description": "Strumenti avanzati per sviluppatori web",
+    "author": "Luca Soda",
+    "icons": {
+        "48": "icons/icon-48.png",
+        "96": "icons/icon-96.png"
+    },
+    "background": {
+        "scripts": ["background.js"],
+        "persistent": false
+    },
+    "permissions": [
+        "activeTab",
+        "tabs",
+        "storage",
+        "<all_urls>",
+        "webRequest"
+    ],
+    "browser_action": {
+        "default_icon": {
+            "16": "icons/icon-16.png",
+            "32": "icons/icon-32.png"
+        },
+        "default_title": "Browser Developer Tools",
+        "default_popup": "popup/popup.html"
+    },
+    "content_scripts": [
+        {
+            "matches": ["<all_urls>"],
+            "js": ["content_scripts/content.js"],
+            "run_at": "document_idle"
+        }
+    ],
+    "commands": {
+        "open-popup": {
+            "suggested_key": {
+                "default": "Alt+Shift+B"
+            },
+            "description": "Apri il popup degli strumenti di sviluppo"
+        }
+    },
+    "web_accessible_resources": [
+        "panel.html",
+        "panel.js",
+        "panel.css",
+        "icons/*"
+    ]
+} 
